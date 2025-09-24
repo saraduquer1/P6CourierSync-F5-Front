@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/hooks/use-toast';
+import PasswordRecovery from '@/components/PasswordRecovery';
 const loginSchema = z.object({
   email: z.string().email('Ingresa un email válido'),
   password: z.string().min(1, 'La contraseña es requerida')
@@ -21,11 +22,12 @@ export default function Login() {
     login
   } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: 'admin@couriersync.com',
-      password: 'password'
+      email: '',
+      password: ''
     }
   });
 
@@ -82,7 +84,7 @@ export default function Login() {
                     <FormControl>
                       <div className="relative">
                         <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input {...field} type="email" placeholder="admin@couriersync.com" className="pl-10" />
+                        <Input {...field} type="email" placeholder="tu@email.com" className="pl-10" />
                       </div>
                     </FormControl>
                     <FormMessage />
@@ -94,7 +96,7 @@ export default function Login() {
                     <FormControl>
                       <div className="relative">
                         <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input {...field} type="password" placeholder="password" className="pl-10" />
+                        <Input {...field} type="password" placeholder="Tu contraseña" className="pl-10" />
                       </div>
                     </FormControl>
                     <FormMessage />
@@ -105,7 +107,21 @@ export default function Login() {
             </form>
           </Form>
           
+          <div className="text-center mt-4">
+            <button
+              type="button"
+              onClick={() => setShowRecovery(true)}
+              className="text-sm text-primary hover:underline"
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+          </div>
         </CardContent>
+        
+        <PasswordRecovery 
+          open={showRecovery} 
+          onOpenChange={setShowRecovery} 
+        />
       </Card>
     </div>;
 }

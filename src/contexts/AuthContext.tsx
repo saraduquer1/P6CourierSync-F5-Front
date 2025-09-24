@@ -30,10 +30,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string): Promise<boolean> => {
-    // Simulación de login con credenciales fijas
-    if (email === 'admin@couriersync.com' && password === 'password') {
-      setUser(mockUser);
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(mockUser));
+    // Simulación de login - acepta cualquier email y contraseña
+    if (email && password) {
+      const user = { ...mockUser, email };
+      setUser(user);
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
       return true;
     }
     return false;
