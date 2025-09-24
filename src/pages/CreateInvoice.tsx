@@ -302,7 +302,6 @@ export default function CreateInvoice() {
                             <SelectItem value="Efectivo">Efectivo</SelectItem>
                             <SelectItem value="Tarjeta de Crédito">Tarjeta de Crédito</SelectItem>
                             <SelectItem value="Tarjeta de Débito">Tarjeta de Débito</SelectItem>
-                            <SelectItem value="Cheque">Cheque</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
