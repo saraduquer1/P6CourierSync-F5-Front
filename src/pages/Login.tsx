@@ -10,31 +10,29 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/hooks/use-toast';
-
 const loginSchema = z.object({
   email: z.string().email('Ingresa un email válido'),
-  password: z.string().min(1, 'La contraseña es requerida'),
+  password: z.string().min(1, 'La contraseña es requerida')
 });
-
 type LoginForm = z.infer<typeof loginSchema>;
-
 export default function Login() {
-  const { user, login } = useAuth();
+  const {
+    user,
+    login
+  } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
-
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
       email: 'admin@couriersync.com',
-      password: 'password',
-    },
+      password: 'password'
+    }
   });
 
   // Si ya está autenticado, redirigir al panel
   if (user) {
     return <Navigate to="/panel" replace />;
   }
-
   const onSubmit = async (data: LoginForm) => {
     setIsLoading(true);
     try {
@@ -42,28 +40,26 @@ export default function Login() {
       if (success) {
         toast({
           title: 'Bienvenido a CourierSync',
-          description: 'Has iniciado sesión correctamente',
+          description: 'Has iniciado sesión correctamente'
         });
       } else {
         toast({
           title: 'Error de autenticación',
           description: 'Email o contraseña incorrectos',
-          variant: 'destructive',
+          variant: 'destructive'
         });
       }
     } catch (error) {
       toast({
         title: 'Error',
         description: 'Ocurrió un error al iniciar sesión',
-        variant: 'destructive',
+        variant: 'destructive'
       });
     } finally {
       setIsLoading(false);
     }
   };
-
-  return (
-    <div className="min-h-screen bg-accent/50 flex items-center justify-center p-4">
+  return <div className="min-h-screen bg-accent/50 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center space-y-4">
           <div className="flex justify-center">
@@ -79,62 +75,37 @@ export default function Login() {
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
+              <FormField control={form.control} name="email" render={({
+              field
+            }) => <FormItem>
                     <FormLabel>Email</FormLabel>
                     <FormControl>
                       <div className="relative">
                         <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          {...field}
-                          type="email"
-                          placeholder="admin@couriersync.com"
-                          className="pl-10"
-                        />
+                        <Input {...field} type="email" placeholder="admin@couriersync.com" className="pl-10" />
                       </div>
                     </FormControl>
                     <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
+                  </FormItem>} />
+              <FormField control={form.control} name="password" render={({
+              field
+            }) => <FormItem>
                     <FormLabel>Contraseña</FormLabel>
                     <FormControl>
                       <div className="relative">
                         <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          {...field}
-                          type="password"
-                          placeholder="password"
-                          className="pl-10"
-                        />
+                        <Input {...field} type="password" placeholder="password" className="pl-10" />
                       </div>
                     </FormControl>
                     <FormMessage />
-                  </FormItem>
-                )}
-              />
+                  </FormItem>} />
               <Button type="submit" className="w-full" disabled={isLoading}>
                 {isLoading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
               </Button>
             </form>
           </Form>
-          <div className="mt-6 p-4 bg-accent rounded-lg">
-            <p className="text-sm text-muted-foreground text-center">
-              <strong>Credenciales de prueba:</strong><br />
-              Email: admin@couriersync.com<br />
-              Contraseña: password
-            </p>
-          </div>
+          
         </CardContent>
       </Card>
-    </div>
-  );
+    </div>;
 }
