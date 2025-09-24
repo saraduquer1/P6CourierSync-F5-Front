@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Header } from '@/components/layout/Header';
 import { Shipment, Invoice, InvoiceItem, STORAGE_KEYS } from '@/types';
 import { toast } from '@/hooks/use-toast';
@@ -290,9 +291,20 @@ export default function CreateInvoice() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Método de Pago</FormLabel>
-                        <FormControl>
-                          <Input placeholder="Transferencia Bancaria" {...field} />
-                        </FormControl>
+                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecciona el método de pago" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="Transferencia Bancaria">Transferencia Bancaria</SelectItem>
+                            <SelectItem value="Efectivo">Efectivo</SelectItem>
+                            <SelectItem value="Tarjeta de Crédito">Tarjeta de Crédito</SelectItem>
+                            <SelectItem value="Tarjeta de Débito">Tarjeta de Débito</SelectItem>
+                            <SelectItem value="Cheque">Cheque</SelectItem>
+                          </SelectContent>
+                        </Select>
                         <FormMessage />
                       </FormItem>
                     )}
