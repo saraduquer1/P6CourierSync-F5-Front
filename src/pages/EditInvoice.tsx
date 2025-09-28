@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ArrowLeft, Save, User, FileText, Calculator } from 'lucide-react';
+import { ArrowLeft, Save, Send, User, FileText, Calculator } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -77,6 +77,14 @@ export default function EditInvoice() {
   }, [id, form]);
 
   const onSubmit = (data: InvoiceFormData) => {
+    updateInvoice(data, 'Borrador');
+  };
+
+  const onSubmitAsIssued = (data: InvoiceFormData) => {
+    updateInvoice(data, 'Emitida');
+  };
+
+  const updateInvoice = (data: InvoiceFormData, status: 'Borrador' | 'Emitida') => {
     if (!invoice) return;
 
     setLoading(true);
@@ -89,9 +97,16 @@ export default function EditInvoice() {
       // Actualizar la factura específica
       const updatedInvoices = allInvoices.map(inv => {
         if (inv.id === id) {
+          // Si cambia a emitida, actualizar el ID de borrador a definitivo
+          const newId = status === 'Emitida' && inv.id.startsWith('Draft-') 
+            ? inv.id.replace('Draft-', 'F-')
+            : inv.id;
+          
           return {
             ...inv,
             ...data,
+            id: newId,
+            status: status,
           };
         }
         return inv;
@@ -100,9 +115,12 @@ export default function EditInvoice() {
       // Guardar en localStorage
       localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
 
+      const actionText = status === 'Emitida' ? 'emitida' : 'actualizada';
       toast({
-        title: "Factura actualizada",
-        description: "Los cambios han sido guardados exitosamente.",
+        title: `Factura ${actionText}`,
+        description: status === 'Emitida' 
+          ? "La factura ha sido emitida exitosamente y ya no se puede editar."
+          : "Los cambios han sido guardados exitosamente.",
       });
 
       // Redirigir al panel
@@ -362,11 +380,22 @@ export default function EditInvoice() {
               
               <Button 
                 type="submit" 
+                variant="secondary"
                 className="gap-2"
                 disabled={loading}
               >
                 <Save className="h-4 w-4" />
-                {loading ? 'Guardando...' : 'Guardar Cambios'}
+                {loading ? 'Guardando...' : 'Guardar como Borrador'}
+              </Button>
+
+              <Button 
+                type="button"
+                onClick={form.handleSubmit(onSubmitAsIssued)}
+                className="gap-2"
+                disabled={loading}
+              >
+                <Send className="h-4 w-4" />
+                {loading ? 'Emitiendo...' : 'Emitir Factura'}
               </Button>
             </div>
           </form>
