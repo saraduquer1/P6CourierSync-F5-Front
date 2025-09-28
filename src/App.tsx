@@ -8,6 +8,8 @@ import Login from "./pages/Login";
 import Panel from "./pages/Panel";
 import SelectShipments from "./pages/SelectShipments";
 import CreateInvoice from "./pages/CreateInvoice";
+import ViewInvoice from "./pages/ViewInvoice";
+import EditInvoice from "./pages/EditInvoice";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -36,6 +38,16 @@ const App = () => (
             <Route path="/facturas/nueva" element={
               <ProtectedRoute>
                 <CreateInvoice />
+              </ProtectedRoute>
+            } />
+            <Route path="/facturas/:id/ver" element={
+              <ProtectedRoute>
+                <ViewInvoice />
+              </ProtectedRoute>
+            } />
+            <Route path="/facturas/:id/editar" element={
+              <ProtectedRoute>
+                <EditInvoice />
               </ProtectedRoute>
             } />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
