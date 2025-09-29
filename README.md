@@ -1,4 +1,4 @@
-## Deploy in Vercel
+## Deployment in Vercel
 https://p6-courier-sync-f5-front.vercel.app/
 
 ## Project info
