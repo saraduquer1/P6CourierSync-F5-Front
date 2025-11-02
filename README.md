@@ -1,6 +1,3 @@
-## Deployment in Vercel
-https://p6-courier-sync-f5-front.vercel.app/
-
 ## Project info
 
 If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.

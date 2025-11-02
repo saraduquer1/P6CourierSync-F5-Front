@@ -1,19 +1,37 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Eye, Edit, FileText } from 'lucide-react';
+import { Plus, Eye, Edit, FileText, Trash2, Download, Send, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Header } from '@/components/layout/Header';
+import { useToast } from '@/hooks/use-toast';
 import { Invoice, STORAGE_KEYS } from '@/types';
-import { initialInvoices } from '@/data/mockData';
+import { initialInvoices, defaultTemplates } from '@/data/mockData';
+import { usePDFGenerator } from '@/hooks/usePDFGenerator';
+import { useInvoiceEmission } from '@/hooks/useInvoiceEmission';
+import { PDFPreviewDialog } from '@/components/PDFPreviewDialog';
+import { resetLocalStorage } from '@/lib/resetData';
 
 export default function Panel() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
+  const [showPDFPreview, setShowPDFPreview] = useState(false);
+  const [currentInvoiceId, setCurrentInvoiceId] = useState<string>('');
+  const { generatePDF, downloadPDF, isGenerating } = usePDFGenerator();
+  const { emitInvoice, isEmitting } = useInvoiceEmission();
 
   useEffect(() => {
+    // Reiniciar datos automáticamente si no hay envíos
+    const savedShipments = localStorage.getItem(STORAGE_KEYS.SHIPMENTS);
+    if (!savedShipments || JSON.parse(savedShipments).length === 0) {
+      resetLocalStorage();
+    }
+    
     // Cargar facturas del localStorage o usar datos iniciales
     const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
     if (savedInvoices) {
@@ -54,6 +72,36 @@ export default function Panel() {
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('es-CO');
+  };
+
+  const handleDeleteInvoice = (invoiceId: string) => {
+    const updatedInvoices = invoices.filter(invoice => invoice.id !== invoiceId);
+    setInvoices(updatedInvoices);
+    localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
+    
+    toast({
+      title: "Factura eliminada",
+      description: "El borrador de la factura ha sido eliminado correctamente.",
+    });
+  };
+
+  const handleQuickPDFPreview = async (invoice: Invoice) => {
+    const template = defaultTemplates.find(
+      t => t.segment === invoice.clientSegment
+    ) || defaultTemplates[0];
+    
+    const blob = await generatePDF(invoice, template, false);
+    
+    if (blob) {
+      setPdfBlob(blob);
+      setCurrentInvoiceId(invoice.id);
+      setShowPDFPreview(true);
+    }
+  };
+
+  const handleDownloadFromPreview = () => {
+    if (!pdfBlob || !currentInvoiceId) return;
+    downloadPDF(pdfBlob, currentInvoiceId);
   };
 
   return (
@@ -126,6 +174,62 @@ export default function Panel() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              onClick={async () => {
+                                const result = await emitInvoice(invoice.id);
+                                if (result.success) {
+                                  window.location.reload();
+                                }
+                              }}
+                              disabled={isEmitting}
+                              title="Emitir factura"
+                            >
+                              <Send className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {invoice.status === 'Emitida' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleQuickPDFPreview(invoice)}
+                              disabled={isGenerating}
+                              title="Vista previa PDF"
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {invoice.status === 'Borrador' && (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>¿Eliminar borrador?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Esta acción no se puede deshacer. El borrador de la factura será eliminado permanentemente.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => handleDeleteInvoice(invoice.id)}
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  >
+                                    Eliminar
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          )}
+                          {invoice.status === 'Borrador' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               onClick={() => navigate(`/facturas/${invoice.id}/editar`)}
                             >
                               <Edit className="h-4 w-4" />
@@ -147,6 +251,14 @@ export default function Panel() {
             )}
           </CardContent>
         </Card>
+
+        <PDFPreviewDialog
+          open={showPDFPreview}
+          onOpenChange={setShowPDFPreview}
+          pdfBlob={pdfBlob}
+          invoiceId={currentInvoiceId}
+          onDownload={handleDownloadFromPreview}
+        />
       </main>
     </div>
   );

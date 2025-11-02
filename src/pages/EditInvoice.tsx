@@ -6,19 +6,22 @@ import { z } from 'zod';
 import { ArrowLeft, Save, Send, User, FileText, Calculator } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Header } from '@/components/layout/Header';
 import { Invoice, STORAGE_KEYS } from '@/types';
 import { useToast } from '@/hooks/use-toast';
+import { validateInvoiceForEmission } from '@/lib/invoiceValidator';
+import { generateFiscalFolio } from '@/lib/fiscalFolioGenerator';
 
 const invoiceSchema = z.object({
   clientName: z.string().min(2, 'El nombre del cliente es requerido'),
   clientNit: z.string().min(1, 'El NIT es requerido'),
   clientAddress: z.string().min(5, 'La dirección es requerida'),
   clientEmail: z.string().email('Email inválido'),
+  clientSegment: z.enum(['retail', 'mayorista', 'corporativo']).optional(),
   issueDate: z.string().min(1, 'La fecha de emisión es requerida'),
   dueDate: z.string().min(1, 'La fecha de vencimiento es requerida'),
   paymentMethod: z.string().min(1, 'El método de pago es requerido'),
@@ -41,6 +44,7 @@ export default function EditInvoice() {
       clientNit: '',
       clientAddress: '',
       clientEmail: '',
+      clientSegment: 'retail',
       issueDate: '',
       dueDate: '',
       paymentMethod: '',
@@ -64,6 +68,7 @@ export default function EditInvoice() {
             clientNit: foundInvoice.clientNit,
             clientAddress: foundInvoice.clientAddress,
             clientEmail: foundInvoice.clientEmail,
+            clientSegment: foundInvoice.clientSegment || 'retail',
             issueDate: foundInvoice.issueDate,
             dueDate: foundInvoice.dueDate,
             paymentMethod: foundInvoice.paymentMethod,
@@ -94,43 +99,85 @@ export default function EditInvoice() {
       const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
       const allInvoices: Invoice[] = savedInvoices ? JSON.parse(savedInvoices) : [];
 
-      // Actualizar la factura específica
-      const updatedInvoices = allInvoices.map(inv => {
-        if (inv.id === id) {
-          // Si cambia a emitida, actualizar el ID de borrador a definitivo
-          const newId = status === 'Emitida' && inv.id.startsWith('Draft-') 
-            ? inv.id.replace('Draft-', 'F-')
-            : inv.id;
-          
-          return {
-            ...inv,
-            ...data,
-            id: newId,
-            status: status,
-          };
+      // Si se va a emitir, validar y generar folio fiscal
+      if (status === 'Emitida') {
+        // Crear factura temporal con los nuevos datos
+        const tempInvoice: Invoice = {
+          ...invoice,
+          ...data
+        };
+
+        // Validar antes de emitir
+        const validation = validateInvoiceForEmission(tempInvoice);
+        
+        if (!validation.isValid) {
+          toast({
+            title: 'Validación fallida',
+            description: validation.errors[0],
+            variant: 'destructive',
+          });
+          setLoading(false);
+          return;
         }
-        return inv;
-      });
 
-      // Guardar en localStorage
-      localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
+        // Generar folio fiscal
+        const fiscalFolio = generateFiscalFolio(allInvoices);
 
-      const actionText = status === 'Emitida' ? 'emitida' : 'actualizada';
-      toast({
-        title: `Factura ${actionText}`,
-        description: status === 'Emitida' 
-          ? "La factura ha sido emitida exitosamente y ya no se puede editar."
-          : "Los cambios han sido guardados exitosamente.",
-      });
+        // Actualizar factura con folio fiscal
+        const updatedInvoices = allInvoices.map(inv => {
+          if (inv.id === id) {
+            return {
+              ...inv,
+              ...data,
+              id: fiscalFolio.id,
+              status: 'Emitida',
+            };
+          }
+          return inv;
+        });
 
-      // Redirigir al panel
+        localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
+
+        // Mostrar warnings
+        validation.warnings.forEach(warning => {
+          toast({
+            title: 'Advertencia',
+            description: warning,
+          });
+        });
+
+        toast({
+          title: 'Factura emitida',
+          description: `Folio fiscal: ${fiscalFolio.id}`,
+        });
+      } else {
+        // Solo actualizar borrador sin validación
+        const updatedInvoices = allInvoices.map(inv => {
+          if (inv.id === id) {
+            return {
+              ...inv,
+              ...data,
+              status: 'Borrador',
+            };
+          }
+          return inv;
+        });
+
+        localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
+
+        toast({
+          title: 'Factura actualizada',
+          description: 'Los cambios han sido guardados exitosamente.',
+        });
+      }
+
       navigate('/panel');
     } catch (error) {
       console.error('Error updating invoice:', error);
       toast({
-        title: "Error",
-        description: "Hubo un problema al actualizar la factura.",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Hubo un problema al actualizar la factura.',
+        variant: 'destructive',
       });
     } finally {
       setLoading(false);
@@ -266,6 +313,28 @@ export default function EditInvoice() {
                         <FormControl>
                           <Input type="email" placeholder="cliente@empresa.com" {...field} />
                         </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="clientSegment"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Segmento del Cliente</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecciona un segmento" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="retail">Retail</SelectItem>
+                            <SelectItem value="mayorista">Mayorista</SelectItem>
+                            <SelectItem value="corporativo">Corporativo</SelectItem>
+                          </SelectContent>
+                        </Select>
                         <FormMessage />
                       </FormItem>
                     )}
