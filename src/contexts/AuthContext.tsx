@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { apiService } from '@/service/apiService';
-import { API_CONFIG } from '@/service/apiConfig';
+import { apiService } from '@/services/apiService';
+import { API_CONFIG } from '@/services/apiConfig';
 // Tipos basados en la respuesta del backend
 interface AuthResponse {
   token: string;
