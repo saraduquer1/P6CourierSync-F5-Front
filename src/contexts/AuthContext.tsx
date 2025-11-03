@@ -1,12 +1,13 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { apiService } from '@/services/apiService.ts';
-import { API_CONFIG } from '@/services/apiConfig.ts';
+import { apiService } from '@/services/apiService';
+import { API_CONFIG } from '@/services/apiConfig';
+
 // Tipos basados en la respuesta del backend
 interface AuthResponse {
   token: string;
   username: string;
   email: string;
-  id: number;
+  userId: number;  // Cambiado de 'id' a 'userId' para coincidir con el backend
 }
 
 interface ApiResponse<T> {
@@ -65,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (response.success && response.data) {
         const userData: User = {
-          id: response.data.id.toString(),
+          id: response.data.userId.toString(),
           email: response.data.email,
           name: response.data.username,
           token: response.data.token,
@@ -101,7 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (response.success && response.data) {
         const userData: User = {
-          id: response.data.id.toString(),
+          id: response.data.userId.toString(),
           email: response.data.email,
           name: response.data.username,
           token: response.data.token,
