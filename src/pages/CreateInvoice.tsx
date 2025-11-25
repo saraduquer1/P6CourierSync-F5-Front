@@ -9,20 +9,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Header } from '@/components/layout/Header';
-import { Shipment, Invoice, InvoiceItem, STORAGE_KEYS } from '@/types';
 import { toast } from '@/hooks/use-toast';
-import { validateInvoiceForEmission } from '@/lib/invoiceValidator';
-import { generateFiscalFolio } from '@/lib/fiscalFolioGenerator';
+import { invoiceService, CreateInvoiceDTO, InvoiceItemDTO } from '@/services/invoiceService.ts';
+import { ShipmentDTO } from '@/services/shipmentService.ts';
 
 const invoiceSchema = z.object({
   clientName: z.string().min(1, 'El nombre del cliente es requerido'),
   clientNit: z.string().min(1, 'El NIT es requerido'),
   clientAddress: z.string().min(1, 'La dirección es requerida'),
   clientEmail: z.string().email('Email inválido'),
-  clientSegment: z.enum(['retail', 'mayorista', 'corporativo']).optional(),
   issueDate: z.string().min(1, 'La fecha de emisión es requerida'),
   dueDate: z.string().min(1, 'La fecha de vencimiento es requerida'),
   paymentMethod: z.string().min(1, 'El método de pago es requerido'),
@@ -31,10 +29,16 @@ const invoiceSchema = z.object({
 
 type InvoiceFormData = z.infer<typeof invoiceSchema>;
 
+interface InvoiceItemDisplay {
+  descripcion: string;
+  cantidad: number;
+  precioUnitario: number;
+}
+
 export default function CreateInvoice() {
   const navigate = useNavigate();
-  const [selectedShipments, setSelectedShipments] = useState<Shipment[]>([]);
-  const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([]);
+  const [selectedShipments, setSelectedShipments] = useState<ShipmentDTO[]>([]);
+  const [invoiceItems, setInvoiceItems] = useState<InvoiceItemDisplay[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useForm<InvoiceFormData>({
@@ -44,9 +48,8 @@ export default function CreateInvoice() {
       clientNit: '',
       clientAddress: '',
       clientEmail: '',
-      clientSegment: 'retail',
       issueDate: new Date().toISOString().split('T')[0],
-      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // +30 días
+      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       paymentMethod: 'Transferencia Bancaria',
       observations: '',
     },
@@ -57,14 +60,14 @@ export default function CreateInvoice() {
     const savedShipments = sessionStorage.getItem('selectedShipments');
     if (savedShipments) {
       try {
-        const shipments: Shipment[] = JSON.parse(savedShipments);
+        const shipments: ShipmentDTO[] = JSON.parse(savedShipments);
         setSelectedShipments(shipments);
         
         // Convertir envíos a items de factura
-        const items: InvoiceItem[] = shipments.map(shipment => ({
-          descripcion: `Transporte a ${shipment.direccion}`,
+        const items: InvoiceItemDisplay[] = shipments.map(shipment => ({
+          descripcion: `Transporte a ${shipment.destinationAddress}`,
           cantidad: 1,
-          precioUnitario: shipment.tarifa,
+          precioUnitario: shipment.totalWeight * 5000, // Precio de ejemplo: 5000 por kg
         }));
         
         setInvoiceItems(items);
@@ -87,13 +90,6 @@ export default function CreateInvoice() {
   const taxAmount = subtotal * 0.19;
   const total = subtotal + taxAmount;
 
-  const generateInvoiceId = () => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    return `Draft-${year}-${random}`;
-  };
-
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -106,89 +102,51 @@ export default function CreateInvoice() {
     setIsLoading(true);
     
     try {
-      // Crear objeto de factura temporal
-      const tempInvoice: Invoice = {
-        id: 'TEMP',
-        status: 'Borrador',
+      // Preparar items para el backend
+      const items: InvoiceItemDTO[] = invoiceItems.map((item, index) => ({
+        description: item.descripcion,
+        quantity: item.cantidad,
+        unitPrice: item.precioUnitario,
+        shipmentId: selectedShipments[index]?.id, // Vincular con el shipment
+      }));
+
+      // Preparar datos de la factura
+      const invoiceData: CreateInvoiceDTO = {
         clientName: data.clientName,
         clientNit: data.clientNit,
         clientAddress: data.clientAddress,
         clientEmail: data.clientEmail,
-        clientSegment: data.clientSegment,
-        issueDate: data.issueDate,
+        invoiceDate: data.issueDate,
         dueDate: data.dueDate,
         paymentMethod: data.paymentMethod,
-        currency: 'Peso Colombiano',
-        items: invoiceItems,
-        subtotal,
-        taxAmount,
-        total,
+        currency: 'COP',
+        items: items,
+        shipmentIds: selectedShipments.map(s => s.id),
+        taxAmount: taxAmount,
         observations: data.observations,
       };
 
-      // Si se va a emitir, validar primero
-      if (shouldEmit) {
-        const validation = validateInvoiceForEmission(tempInvoice);
-        
-        if (!validation.isValid) {
-          toast({
-            title: 'Validación fallida',
-            description: validation.errors[0],
-            variant: 'destructive',
-          });
-          setIsLoading(false);
-          return;
-        }
+      // Crear factura en el backend
+      const createdInvoice = await invoiceService.create(invoiceData);
 
-        // Generar folio fiscal
-        const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
-        const existingInvoices: Invoice[] = savedInvoices ? JSON.parse(savedInvoices) : [];
-        const fiscalFolio = generateFiscalFolio(existingInvoices);
-        
-        tempInvoice.id = fiscalFolio.id;
-        tempInvoice.status = 'Emitida';
-        
-        // Mostrar warnings
-        validation.warnings.forEach(warning => {
-          toast({
-            title: 'Advertencia',
-            description: warning,
-          });
+      // Si se debe emitir, llamar al endpoint de emisión
+      if (shouldEmit) {
+        await invoiceService.issue(createdInvoice.id);
+        toast({
+          title: 'Factura emitida',
+          description: `Factura ${createdInvoice.invoiceNumber} emitida correctamente`,
         });
       } else {
-        // Generar ID de borrador
-        tempInvoice.id = generateInvoiceId();
+        toast({
+          title: 'Borrador guardado',
+          description: `Borrador ${createdInvoice.invoiceNumber} guardado correctamente`,
+        });
       }
 
-      // Guardar factura
-      const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
-      const invoices: Invoice[] = savedInvoices ? JSON.parse(savedInvoices) : [];
-      invoices.push(tempInvoice);
-      localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(invoices));
-
-      // Actualizar envíos si se emitió
-      if (shouldEmit) {
-        const savedShipments = localStorage.getItem(STORAGE_KEYS.SHIPMENTS);
-        if (savedShipments) {
-          const shipments: Shipment[] = JSON.parse(savedShipments);
-          const updatedShipments = shipments.map(shipment => 
-            selectedShipments.find(s => s.id === shipment.id)
-              ? { ...shipment, estado: 'Facturado' as const }
-              : shipment
-          );
-          localStorage.setItem(STORAGE_KEYS.SHIPMENTS, JSON.stringify(updatedShipments));
-        }
-      }
-
+      // Limpiar sessionStorage
       sessionStorage.removeItem('selectedShipments');
 
-      toast({
-        title: shouldEmit ? 'Factura emitida' : 'Borrador guardado',
-        description: shouldEmit 
-          ? `Factura ${tempInvoice.id} emitida correctamente`
-          : `Borrador ${tempInvoice.id} guardado correctamente`,
-      });
-
+      // Redirigir al panel
       navigate('/panel');
     } catch (error) {
       console.error('Error saving invoice:', error);
@@ -254,7 +212,7 @@ export default function CreateInvoice() {
                       <FormItem>
                         <FormLabel>NIT</FormLabel>
                         <FormControl>
-                          <Input placeholder="Ej: 900.123.456-7" {...field} />
+                          <Input placeholder="900123456-7" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -267,7 +225,7 @@ export default function CreateInvoice() {
                       <FormItem>
                         <FormLabel>Dirección</FormLabel>
                         <FormControl>
-                          <Input placeholder="Ej: Calle 26 #13-25, Bogotá" {...field} />
+                          <Input placeholder="Calle 50 #30-20" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -280,30 +238,8 @@ export default function CreateInvoice() {
                       <FormItem>
                         <FormLabel>Email</FormLabel>
                         <FormControl>
-                          <Input type="email" placeholder="contabilidad@empresa.com" {...field} />
+                          <Input type="email" placeholder="cliente@example.com" {...field} />
                         </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="clientSegment"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Segmento del Cliente</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Selecciona un segmento" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="retail">Retail</SelectItem>
-                            <SelectItem value="mayorista">Mayorista</SelectItem>
-                            <SelectItem value="corporativo">Corporativo</SelectItem>
-                          </SelectContent>
-                        </Select>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -466,7 +402,6 @@ export default function CreateInvoice() {
               </Button>
               <Button
                 type="button"
-                variant="success"
                 onClick={form.handleSubmit((data) => onSubmit(data, true))}
                 disabled={isLoading}
                 className="gap-2"

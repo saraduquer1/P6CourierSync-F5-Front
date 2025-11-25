@@ -3,25 +3,22 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ArrowLeft, Save, Send, User, FileText, Calculator } from 'lucide-react';
+import { ArrowLeft, Save, Send, User, FileText, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Header } from '@/components/layout/Header';
-import { Invoice, STORAGE_KEYS } from '@/types';
-import { useToast } from '@/hooks/use-toast';
-import { validateInvoiceForEmission } from '@/lib/invoiceValidator';
-import { generateFiscalFolio } from '@/lib/fiscalFolioGenerator';
+import { toast } from '@/hooks/use-toast';
+import { invoiceService, InvoiceResponseDTO, UpdateInvoiceDTO } from '@/services/invoiceService.ts';
 
 const invoiceSchema = z.object({
   clientName: z.string().min(2, 'El nombre del cliente es requerido'),
   clientNit: z.string().min(1, 'El NIT es requerido'),
   clientAddress: z.string().min(5, 'La dirección es requerida'),
   clientEmail: z.string().email('Email inválido'),
-  clientSegment: z.enum(['retail', 'mayorista', 'corporativo']).optional(),
   issueDate: z.string().min(1, 'La fecha de emisión es requerida'),
   dueDate: z.string().min(1, 'La fecha de vencimiento es requerida'),
   paymentMethod: z.string().min(1, 'El método de pago es requerido'),
@@ -33,9 +30,10 @@ type InvoiceFormData = z.infer<typeof invoiceSchema>;
 export default function EditInvoice() {
   const navigate = useNavigate();
   const { id } = useParams();
-  const { toast } = useToast();
-  const [invoice, setInvoice] = useState<Invoice | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [invoice, setInvoice] = useState<InvoiceResponseDTO | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isEmitting, setIsEmitting] = useState(false);
 
   const form = useForm<InvoiceFormData>({
     resolver: zodResolver(invoiceSchema),
@@ -44,7 +42,6 @@ export default function EditInvoice() {
       clientNit: '',
       clientAddress: '',
       clientEmail: '',
-      clientSegment: 'retail',
       issueDate: '',
       dueDate: '',
       paymentMethod: '',
@@ -53,176 +50,159 @@ export default function EditInvoice() {
   });
 
   useEffect(() => {
-    const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
-    if (savedInvoices) {
-      try {
-        const invoices: Invoice[] = JSON.parse(savedInvoices);
-        const foundInvoice = invoices.find(inv => inv.id === id);
-        
-        if (foundInvoice) {
-          setInvoice(foundInvoice);
-          
-          // Poblar el formulario con los datos existentes
-          form.reset({
-            clientName: foundInvoice.clientName,
-            clientNit: foundInvoice.clientNit,
-            clientAddress: foundInvoice.clientAddress,
-            clientEmail: foundInvoice.clientEmail,
-            clientSegment: foundInvoice.clientSegment || 'retail',
-            issueDate: foundInvoice.issueDate,
-            dueDate: foundInvoice.dueDate,
-            paymentMethod: foundInvoice.paymentMethod,
-            observations: foundInvoice.observations || '',
-          });
-        }
-      } catch (error) {
-        console.error('Error loading invoice:', error);
-      }
+    if (id) {
+      loadInvoice();
     }
-  }, [id, form]);
+  }, [id]);
 
-  const onSubmit = (data: InvoiceFormData) => {
-    updateInvoice(data, 'Borrador');
-  };
-
-  const onSubmitAsIssued = (data: InvoiceFormData) => {
-    updateInvoice(data, 'Emitida');
-  };
-
-  const updateInvoice = (data: InvoiceFormData, status: 'Borrador' | 'Emitida') => {
-    if (!invoice) return;
-
-    setLoading(true);
-
+  const loadInvoice = async () => {
+    if (!id) return;
+    
+    setIsLoading(true);
     try {
-      // Obtener todas las facturas del localStorage
-      const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
-      const allInvoices: Invoice[] = savedInvoices ? JSON.parse(savedInvoices) : [];
-
-      // Si se va a emitir, validar y generar folio fiscal
-      if (status === 'Emitida') {
-        // Crear factura temporal con los nuevos datos
-        const tempInvoice: Invoice = {
-          ...invoice,
-          ...data
-        };
-
-        // Validar antes de emitir
-        const validation = validateInvoiceForEmission(tempInvoice);
-        
-        if (!validation.isValid) {
-          toast({
-            title: 'Validación fallida',
-            description: validation.errors[0],
-            variant: 'destructive',
-          });
-          setLoading(false);
-          return;
-        }
-
-        // Generar folio fiscal
-        const fiscalFolio = generateFiscalFolio(allInvoices);
-
-        // Actualizar factura con folio fiscal
-        const updatedInvoices = allInvoices.map(inv => {
-          if (inv.id === id) {
-            return {
-              ...inv,
-              ...data,
-              id: fiscalFolio.id,
-              status: 'Emitida',
-            };
-          }
-          return inv;
-        });
-
-        localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
-
-        // Mostrar warnings
-        validation.warnings.forEach(warning => {
-          toast({
-            title: 'Advertencia',
-            description: warning,
-          });
-        });
-
+      const data = await invoiceService.getById(Number(id));
+      
+      // Verificar que sea borrador
+      if (data.status !== 'DRAFT') {
         toast({
-          title: 'Factura emitida',
-          description: `Folio fiscal: ${fiscalFolio.id}`,
+          title: 'Error',
+          description: 'Solo se pueden editar facturas en estado Borrador',
+          variant: 'destructive',
         });
-      } else {
-        // Solo actualizar borrador sin validación
-        const updatedInvoices = allInvoices.map(inv => {
-          if (inv.id === id) {
-            return {
-              ...inv,
-              ...data,
-              status: 'Borrador',
-            };
-          }
-          return inv;
-        });
-
-        localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
-
-        toast({
-          title: 'Factura actualizada',
-          description: 'Los cambios han sido guardados exitosamente.',
-        });
+        navigate('/panel');
+        return;
       }
+      
+      setInvoice(data);
+      
+      // Poblar el formulario
+      form.reset({
+        clientName: data.clientName,
+        clientNit: data.clientNit || '',
+        clientAddress: data.clientAddress || '',
+        clientEmail: data.clientEmail || '',
+        issueDate: data.invoiceDate,
+        dueDate: data.dueDate,
+        paymentMethod: data.paymentMethod || '',
+        observations: data.observations || '',
+      });
+    } catch (error) {
+      console.error('Error loading invoice:', error);
+      toast({
+        title: 'Error',
+        description: 'No se pudo cargar la factura',
+        variant: 'destructive',
+      });
+      navigate('/panel');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  const onSubmit = async (data: InvoiceFormData) => {
+    if (!invoice) return;
+    
+    setIsSaving(true);
+    try {
+      const updateData: UpdateInvoiceDTO = {
+        clientName: data.clientName,
+        clientNit: data.clientNit,
+        clientAddress: data.clientAddress,
+        clientEmail: data.clientEmail,
+        invoiceDate: data.issueDate,
+        dueDate: data.dueDate,
+        paymentMethod: data.paymentMethod,
+        items: invoice.items.map(item => ({
+          shipmentId: item.shipmentId,
+          description: item.description,
+          quantity: item.quantity,
+          unitPrice: Number(item.unitPrice)
+        })),
+        shipmentIds: Array.from(new Set(invoice.items.map(item => item.shipmentId).filter((id): id is number => id !== null))),
+        taxAmount: Number(invoice.taxAmount),
+        currency: invoice.currency,
+        observations: data.observations,
+        version: invoice.version
+      };
+
+      await invoiceService.update(invoice.id, updateData);
+      
+      toast({
+        title: 'Factura actualizada',
+        description: 'Los cambios se guardaron exitosamente',
+      });
+      
       navigate('/panel');
     } catch (error) {
       console.error('Error updating invoice:', error);
       toast({
         title: 'Error',
-        description: 'Hubo un problema al actualizar la factura.',
+        description: 'No se pudo actualizar la factura',
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      setIsSaving(false);
     }
   };
 
-  if (!invoice) {
+  const handleEmit = async () => {
+    if (!invoice) return;
+    
+    setIsEmitting(true);
+    try {
+      await invoiceService.issue(invoice.id);
+      
+      toast({
+        title: 'Factura emitida',
+        description: 'La factura ha sido emitida exitosamente',
+      });
+      
+      navigate('/panel');
+    } catch (error) {
+      console.error('Error emitting invoice:', error);
+      toast({
+        title: 'Error',
+        description: 'No se pudo emitir la factura',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsEmitting(false);
+    }
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('es-CO', {
+      style: 'currency',
+      currency: 'COP',
+      minimumFractionDigits: 0,
+    }).format(amount);
+  };
+
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <div className="text-center">
-            <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h1 className="text-2xl font-bold mb-2">Factura no encontrada</h1>
-            <p className="text-muted-foreground mb-4">La factura que intentas editar no existe o no es editable.</p>
-            <Button onClick={() => navigate('/panel')}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Volver al Panel
-            </Button>
+          <div className="flex items-center justify-center py-12">
+            <RefreshCw className="h-8 w-8 animate-spin text-primary" />
           </div>
         </main>
       </div>
     );
   }
 
-  if (invoice.status !== 'Borrador') {
+  if (!invoice) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <div className="text-center">
+          <div className="text-center py-12">
             <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h1 className="text-2xl font-bold mb-2">Factura no editable</h1>
-            <p className="text-muted-foreground mb-4">
-              Solo las facturas en estado "Borrador" pueden ser editadas.
-            </p>
-            <div className="flex gap-2 justify-center">
-              <Button onClick={() => navigate('/panel')}>
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Volver al Panel
-              </Button>
-              <Button variant="outline" onClick={() => navigate(`/facturas/${id}/ver`)}>
-                Ver Factura
-              </Button>
-            </div>
+            <h3 className="text-lg font-medium mb-2">Factura no encontrada</h3>
+            <Button onClick={() => navigate('/panel')}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Volver al Panel
+            </Button>
           </div>
         </main>
       </div>
@@ -234,19 +214,22 @@ export default function EditInvoice() {
       <Header />
       
       <main className="container mx-auto px-4 py-8">
-        <div className="flex items-center gap-4 mb-6">
-          <Button 
-            variant="outline" 
-            onClick={() => navigate('/panel')}
-            className="gap-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Volver al Panel
-          </Button>
-          
-          <div>
-            <h1 className="text-3xl font-bold text-primary">Editar Factura {invoice.id}</h1>
-            <p className="text-muted-foreground mt-1">Modifica los datos de la factura en borrador</p>
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              onClick={() => navigate('/panel')}
+              className="gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Volver al Panel
+            </Button>
+            <div>
+              <h1 className="text-3xl font-bold text-primary">Editar Factura {invoice.invoiceNumber}</h1>
+              <p className="text-muted-foreground mt-1">
+                Modifica los datos de la factura en borrador
+              </p>
+            </div>
           </div>
         </div>
 
@@ -267,9 +250,9 @@ export default function EditInvoice() {
                     name="clientName"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Nombre del Cliente</FormLabel>
+                        <FormLabel>Nombre del Cliente *</FormLabel>
                         <FormControl>
-                          <Input placeholder="Nombre completo o razón social" {...field} />
+                          <Input placeholder="Ej: Acme Corporation" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -281,9 +264,9 @@ export default function EditInvoice() {
                     name="clientNit"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>NIT</FormLabel>
+                        <FormLabel>NIT *</FormLabel>
                         <FormControl>
-                          <Input placeholder="123456789-0" {...field} />
+                          <Input placeholder="Ej: 900123456-7" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -295,9 +278,9 @@ export default function EditInvoice() {
                     name="clientAddress"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Dirección</FormLabel>
+                        <FormLabel>Dirección *</FormLabel>
                         <FormControl>
-                          <Input placeholder="Dirección completa" {...field} />
+                          <Input placeholder="Ej: Calle 50 #30-20" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -309,32 +292,10 @@ export default function EditInvoice() {
                     name="clientEmail"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Email</FormLabel>
+                        <FormLabel>Email *</FormLabel>
                         <FormControl>
-                          <Input type="email" placeholder="cliente@empresa.com" {...field} />
+                          <Input type="email" placeholder="cliente@ejemplo.com" {...field} />
                         </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="clientSegment"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Segmento del Cliente</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Selecciona un segmento" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="retail">Retail</SelectItem>
-                            <SelectItem value="mayorista">Mayorista</SelectItem>
-                            <SelectItem value="corporativo">Corporativo</SelectItem>
-                          </SelectContent>
-                        </Select>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -356,7 +317,7 @@ export default function EditInvoice() {
                     name="issueDate"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Fecha de Emisión</FormLabel>
+                        <FormLabel>Fecha de Emisión *</FormLabel>
                         <FormControl>
                           <Input type="date" {...field} />
                         </FormControl>
@@ -370,7 +331,7 @@ export default function EditInvoice() {
                     name="dueDate"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Fecha de Vencimiento</FormLabel>
+                        <FormLabel>Fecha de Vencimiento *</FormLabel>
                         <FormControl>
                           <Input type="date" {...field} />
                         </FormControl>
@@ -384,7 +345,7 @@ export default function EditInvoice() {
                     name="paymentMethod"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Método de Pago</FormLabel>
+                        <FormLabel>Método de Pago *</FormLabel>
                         <Select onValueChange={field.onChange} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
@@ -403,68 +364,93 @@ export default function EditInvoice() {
                     )}
                   />
 
-                  <div>
-                    <FormLabel>Moneda</FormLabel>
-                    <div className="mt-2 p-3 bg-muted rounded-md">
-                      <span className="text-sm text-muted-foreground">Peso Colombiano (COP)</span>
-                    </div>
-                  </div>
+                  <FormField
+                    control={form.control}
+                    name="observations"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Observaciones</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder="Notas adicionales sobre la factura..."
+                            className="resize-none"
+                            rows={3}
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                 </CardContent>
               </Card>
             </div>
 
-            {/* Observaciones */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Observaciones (Opcional)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <FormField
-                  control={form.control}
-                  name="observations"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Textarea 
-                          placeholder="Notas adicionales para la factura..."
-                          className="min-h-[100px]"
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+            {/* Resumen de Totales */}
+            <Card className="bg-accent/50">
+              <CardContent className="pt-6">
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span>Subtotal:</span>
+                    <span className="font-medium">{formatCurrency(Number(invoice.subtotal))}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>IVA (19%):</span>
+                    <span className="font-medium">{formatCurrency(Number(invoice.taxAmount))}</span>
+                  </div>
+                  <div className="flex justify-between text-lg font-bold pt-2 border-t">
+                    <span>Total:</span>
+                    <span className="text-primary">{formatCurrency(Number(invoice.totalAmount))}</span>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
+            {/* Botones de Acción */}
             <div className="flex justify-end gap-4">
-              <Button 
-                type="button" 
-                variant="outline" 
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => navigate('/panel')}
               >
                 Cancelar
               </Button>
               
-              <Button 
-                type="submit" 
-                variant="secondary"
+              <Button
+                type="submit"
+                disabled={isSaving}
                 className="gap-2"
-                disabled={loading}
               >
-                <Save className="h-4 w-4" />
-                {loading ? 'Guardando...' : 'Guardar como Borrador'}
+                {isSaving ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Guardando...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4" />
+                    Guardar Cambios
+                  </>
+                )}
               </Button>
 
-              <Button 
+              <Button
                 type="button"
-                onClick={form.handleSubmit(onSubmitAsIssued)}
+                onClick={handleEmit}
+                disabled={isEmitting}
                 className="gap-2"
-                disabled={loading}
               >
-                <Send className="h-4 w-4" />
-                {loading ? 'Emitiendo...' : 'Emitir Factura'}
+                {isEmitting ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Emitiendo...
+                  </>
+                ) : (
+                  <>
+                    <Send className="h-4 w-4" />
+                    Guardar y Emitir
+                  </>
+                )}
               </Button>
             </div>
           </form>

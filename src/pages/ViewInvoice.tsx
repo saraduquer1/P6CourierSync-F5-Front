@@ -1,65 +1,75 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, FileText, User, Calendar, CreditCard, Calculator, Download, Send, AlertCircle } from 'lucide-react';
+import { ArrowLeft, FileText, User, Calendar, CreditCard, RefreshCw, Download, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Header } from '@/components/layout/Header';
-import { Invoice, STORAGE_KEYS } from '@/types';
+import { toast } from '@/hooks/use-toast';
+import { invoiceService, InvoiceResponseDTO } from '@/services/invoiceService.ts';
 import { usePDFGenerator } from '@/hooks/usePDFGenerator';
-import { useInvoiceEmission } from '@/hooks/useInvoiceEmission';
 import { PDFTemplateSelector } from '@/components/PDFTemplateSelector';
 import { PDFPreviewDialog } from '@/components/PDFPreviewDialog';
 import { defaultTemplates } from '@/data/mockData';
+import type { Invoice } from '@/types';
 
 export default function ViewInvoice() {
   const navigate = useNavigate();
   const { id } = useParams();
-  const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [invoice, setInvoice] = useState<InvoiceResponseDTO | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const { generatePDF, downloadPDF, isGenerating } = usePDFGenerator();
-  const { emitInvoice, isEmitting, validationErrors, validationWarnings } = useInvoiceEmission();
   const [selectedTemplate, setSelectedTemplate] = useState(
     defaultTemplates.find(t => t.segment === 'retail') || defaultTemplates[0]
   );
-  const [showEmissionDialog, setShowEmissionDialog] = useState(false);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [showPDFPreview, setShowPDFPreview] = useState(false);
 
   useEffect(() => {
-    const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
-    if (savedInvoices) {
-      try {
-        const invoices: Invoice[] = JSON.parse(savedInvoices);
-        const foundInvoice = invoices.find(inv => inv.id === id);
-        setInvoice(foundInvoice || null);
-        
-        // Seleccionar plantilla según el segmento del cliente
-        if (foundInvoice?.clientSegment) {
-          const template = defaultTemplates.find(t => t.segment === foundInvoice.clientSegment);
-          if (template) {
-            setSelectedTemplate(template);
-          }
-        }
-      } catch (error) {
-        console.error('Error loading invoice:', error);
-      }
+    if (id) {
+      loadInvoice();
     }
   }, [id]);
 
-  const getStatusBadge = (status: Invoice['status']) => {
-    const variants = {
-      'Borrador': 'secondary',
-      'Emitida': 'default',
-      'Pagada': 'success',
-    } as const;
+  const loadInvoice = async () => {
+    if (!id) return;
+    
+    setIsLoading(true);
+    try {
+      const data = await invoiceService.getById(Number(id));
+      setInvoice(data);
+    } catch (error) {
+      console.error('Error loading invoice:', error);
+      toast({
+        title: 'Error',
+        description: 'No se pudo cargar la factura',
+        variant: 'destructive',
+      });
+      navigate('/panel');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    const variants: Record<string, 'secondary' | 'default' | 'success'> = {
+      'DRAFT': 'secondary',
+      'ISSUED': 'default',
+      'PAID': 'success',
+    };
+
+    const labels: Record<string, string> = {
+      'DRAFT': 'Borrador',
+      'ISSUED': 'Emitida',
+      'PAID': 'Pagada',
+    };
 
     return (
       <Badge variant={variants[status] || 'secondary'}>
-        {status}
+        {labels[status] || status}
       </Badge>
     );
   };
@@ -73,12 +83,41 @@ export default function ViewInvoice() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('es-CO');
+    return new Date(dateString).toLocaleDateString('es-CO', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
   };
 
   const handleGeneratePDF = async () => {
-    if (!invoice || !selectedTemplate) return;
-    const blob = await generatePDF(invoice, selectedTemplate, false);
+    if (!invoice) return;
+    
+    // Convertir InvoiceResponseDTO a Invoice para el PDF
+    const invoiceForPDF: Invoice = {
+      id: invoice.invoiceNumber,
+      status: invoice.status === 'DRAFT' ? 'Borrador' : invoice.status === 'ISSUED' ? 'Emitida' : 'Pagada',
+      clientName: invoice.clientName,
+      clientNit: invoice.clientNit || '',
+      clientAddress: invoice.clientAddress || '',
+      clientEmail: invoice.clientEmail || '',
+      clientSegment: 'retail',
+      issueDate: invoice.invoiceDate,
+      dueDate: invoice.dueDate,
+      paymentMethod: invoice.paymentMethod || 'Transferencia Bancaria',
+      currency: invoice.currency as 'COP' | 'USD',
+      items: invoice.items.map(item => ({
+        descripcion: item.description,
+        cantidad: item.quantity,
+        precioUnitario: Number(item.unitPrice)
+      })),
+      subtotal: Number(invoice.subtotal),
+      taxAmount: Number(invoice.taxAmount),
+      total: Number(invoice.totalAmount),
+      observations: invoice.observations || ''
+    };
+    
+    const blob = await generatePDF(invoiceForPDF, selectedTemplate, false);
     
     if (blob) {
       setPdfBlob(blob);
@@ -88,31 +127,33 @@ export default function ViewInvoice() {
 
   const handleDownloadFromPreview = () => {
     if (!pdfBlob || !invoice) return;
-    downloadPDF(pdfBlob, invoice.id);
+    downloadPDF(pdfBlob, invoice.invoiceNumber);
   };
 
-  const handleEmitInvoice = async () => {
-    if (!invoice) return;
-    
-    const result = await emitInvoice(invoice.id);
-    
-    if (result.success && result.invoice) {
-      setShowEmissionDialog(false);
-      // Recargar la factura con el nuevo folio
-      navigate(`/facturas/${result.invoice.id}/ver`);
-      window.location.reload();
-    }
-  };
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <div className="flex items-center justify-center py-12">
+            <RefreshCw className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   if (!invoice) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <div className="text-center">
+          <div className="text-center py-12">
             <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h1 className="text-2xl font-bold mb-2">Factura no encontrada</h1>
-            <p className="text-muted-foreground mb-4">La factura que buscas no existe o ha sido eliminada.</p>
+            <h3 className="text-lg font-medium mb-2">Factura no encontrada</h3>
+            <p className="text-muted-foreground mb-4">
+              La factura que buscas no existe o fue eliminada
+            </p>
             <Button onClick={() => navigate('/panel')}>
               <ArrowLeft className="h-4 w-4 mr-2" />
               Volver al Panel
@@ -128,108 +169,28 @@ export default function ViewInvoice() {
       <Header />
       
       <main className="container mx-auto px-4 py-8">
-        <div className="flex items-center gap-4 mb-6">
-          <Button 
-            variant="outline" 
-            onClick={() => navigate('/panel')}
-            className="gap-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Volver al Panel
-          </Button>
-          
-          <div className="flex-1">
-            <h1 className="text-3xl font-bold text-primary">Factura {invoice.id}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-muted-foreground">Estado:</span>
-              {getStatusBadge(invoice.status)}
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              onClick={() => navigate('/panel')}
+              className="gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Volver al Panel
+            </Button>
+            <div className="flex items-center gap-4">
+              <div>
+                <h1 className="text-3xl font-bold text-primary">Factura {invoice.invoiceNumber}</h1>
+                <p className="text-muted-foreground mt-1">
+                  Estado: {getStatusBadge(invoice.status)}
+                </p>
+              </div>
             </div>
           </div>
 
-          {invoice.status === 'Borrador' && (
-            <Dialog open={showEmissionDialog} onOpenChange={setShowEmissionDialog}>
-              <DialogTrigger asChild>
-                <Button variant="default" className="gap-2">
-                  <Send className="h-4 w-4" />
-                  Emitir Factura
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[600px]">
-                <DialogHeader>
-                  <DialogTitle>Emitir Factura</DialogTitle>
-                  <DialogDescription>
-                    Se ejecutarán validaciones fiscales y se generará un folio único. Esta acción no se puede deshacer.
-                  </DialogDescription>
-                </DialogHeader>
-                
-                {validationErrors.length > 0 && (
-                  <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle>Errores de Validación</AlertTitle>
-                    <AlertDescription>
-                      <ul className="list-disc pl-4 space-y-1 mt-2">
-                        {validationErrors.map((error, index) => (
-                          <li key={index} className="text-sm">{error}</li>
-                        ))}
-                      </ul>
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                {validationWarnings.length > 0 && (
-                  <Alert>
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle>Advertencias</AlertTitle>
-                    <AlertDescription>
-                      <ul className="list-disc pl-4 space-y-1 mt-2">
-                        {validationWarnings.map((warning, index) => (
-                          <li key={index} className="text-sm">{warning}</li>
-                        ))}
-                      </ul>
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                <div className="space-y-3 py-4">
-                  <p className="text-sm text-muted-foreground">
-                    Al emitir la factura se realizarán las siguientes acciones:
-                  </p>
-                  <ul className="list-disc pl-6 space-y-2 text-sm">
-                    <li>Validación completa de datos fiscales</li>
-                    <li>Generación de folio fiscal único (formato F-YYYY-MM-XXXXXX)</li>
-                    <li>Cambio de estado a "Emitida" (no se podrá editar)</li>
-                    <li>Actualización de envíos asociados a "Facturado"</li>
-                  </ul>
-                </div>
-
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowEmissionDialog(false)}
-                    disabled={isEmitting}
-                  >
-                    Cancelar
-                  </Button>
-                  <Button
-                    onClick={handleEmitInvoice}
-                    disabled={isEmitting}
-                    className="gap-2"
-                  >
-                    {isEmitting ? (
-                      <>Emitiendo...</>
-                    ) : (
-                      <>
-                        <Send className="h-4 w-4" />
-                        Confirmar Emisión
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-          )}
-
-          {invoice.status === 'Emitida' && (
+          {/* Botón PDF solo para facturas emitidas */}
+          {invoice.status === 'ISSUED' && (
             <>
               <Dialog>
                 <DialogTrigger asChild>
@@ -248,7 +209,7 @@ export default function ViewInvoice() {
                   
                   <PDFTemplateSelector
                     templates={defaultTemplates}
-                    selectedSegment={invoice.clientSegment}
+                    selectedSegment="retail"
                     onSelectTemplate={setSelectedTemplate}
                   />
                   
@@ -268,7 +229,7 @@ export default function ViewInvoice() {
                 open={showPDFPreview}
                 onOpenChange={setShowPDFPreview}
                 pdfBlob={pdfBlob}
-                invoiceId={invoice.id}
+                invoiceId={invoice.invoiceNumber}
                 onDownload={handleDownloadFromPreview}
               />
             </>
@@ -287,19 +248,19 @@ export default function ViewInvoice() {
             <CardContent className="space-y-4">
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Nombre</label>
-                <p className="text-sm">{invoice.clientName}</p>
+                <p className="text-sm">{invoice.clientName || 'N/A'}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-muted-foreground">NIT</label>
-                <p className="text-sm">{invoice.clientNit}</p>
+                <p className="text-sm">{invoice.clientNit || 'N/A'}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Dirección</label>
-                <p className="text-sm">{invoice.clientAddress}</p>
+                <p className="text-sm">{invoice.clientAddress || 'N/A'}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Email</label>
-                <p className="text-sm">{invoice.clientEmail}</p>
+                <p className="text-sm">{invoice.clientEmail || 'N/A'}</p>
               </div>
             </CardContent>
           </Card>
@@ -314,25 +275,25 @@ export default function ViewInvoice() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <label className="text-sm font-medium text-muted-foreground">Fecha de Emisión</label>
-                <p className="text-sm flex items-center gap-2">
+                <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                   <Calendar className="h-4 w-4" />
-                  {formatDate(invoice.issueDate)}
-                </p>
+                  Fecha de Emisión
+                </label>
+                <p className="text-sm ml-6">{formatDate(invoice.invoiceDate)}</p>
               </div>
               <div>
-                <label className="text-sm font-medium text-muted-foreground">Fecha de Vencimiento</label>
-                <p className="text-sm flex items-center gap-2">
+                <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                   <Calendar className="h-4 w-4" />
-                  {formatDate(invoice.dueDate)}
-                </p>
+                  Fecha de Vencimiento
+                </label>
+                <p className="text-sm ml-6">{formatDate(invoice.dueDate)}</p>
               </div>
               <div>
-                <label className="text-sm font-medium text-muted-foreground">Método de Pago</label>
-                <p className="text-sm flex items-center gap-2">
+                <label className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                   <CreditCard className="h-4 w-4" />
-                  {invoice.paymentMethod}
-                </p>
+                  Método de Pago
+                </label>
+                <p className="text-sm ml-6">{invoice.paymentMethod || 'N/A'}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Moneda</label>
@@ -342,58 +303,6 @@ export default function ViewInvoice() {
           </Card>
         </div>
 
-        {/* Conceptos/Items */}
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Calculator className="h-5 w-5" />
-              Conceptos Facturados
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Descripción</TableHead>
-                  <TableHead className="text-center">Cantidad</TableHead>
-                  <TableHead className="text-right">Precio Unitario</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoice.items.map((item, index) => (
-                  <TableRow key={index}>
-                    <TableCell>{item.descripcion}</TableCell>
-                    <TableCell className="text-center">{item.cantidad}</TableCell>
-                    <TableCell className="text-right">{formatCurrency(item.precioUnitario)}</TableCell>
-                    <TableCell className="text-right font-medium">
-                      {formatCurrency(item.cantidad * item.precioUnitario)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-
-            <Separator className="my-4" />
-
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>Subtotal:</span>
-                <span>{formatCurrency(invoice.subtotal)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span>IVA (19%):</span>
-                <span>{formatCurrency(invoice.taxAmount)}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between text-lg font-bold">
-                <span>Total:</span>
-                <span>{formatCurrency(invoice.total)}</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Observaciones */}
         {invoice.observations && (
           <Card className="mt-6">
@@ -401,10 +310,62 @@ export default function ViewInvoice() {
               <CardTitle>Observaciones</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">{invoice.observations}</p>
+              <p className="text-sm">{invoice.observations}</p>
             </CardContent>
           </Card>
         )}
+
+        {/* Conceptos/Items */}
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Conceptos de la Factura</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Descripción</TableHead>
+                  <TableHead>Cantidad</TableHead>
+                  <TableHead>Precio Unitario</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {invoice.items.map((item, index) => (
+                  <TableRow key={index}>
+                    <TableCell>{item.description}</TableCell>
+                    <TableCell>{item.quantity}</TableCell>
+                    <TableCell>{formatCurrency(Number(item.unitPrice))}</TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(Number(item.quantity) * Number(item.unitPrice))}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        {/* Totales */}
+        <Card className="mt-6 bg-accent/50">
+          <CardContent className="pt-6">
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <span>Subtotal:</span>
+                <span className="font-medium">{formatCurrency(Number(invoice.subtotal))}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>IVA (19%):</span>
+                <span className="font-medium">{formatCurrency(Number(invoice.taxAmount))}</span>
+              </div>
+              <Separator className="my-2" />
+              <div className="flex justify-between text-lg font-bold">
+                <span>Total:</span>
+                <span className="text-primary">{formatCurrency(Number(invoice.totalAmount))}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </main>
     </div>
   );

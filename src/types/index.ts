@@ -59,7 +59,7 @@ export interface Invoice {
   issueDate: string; // Formato YYYY-MM-DD
   dueDate: string;   // Formato YYYY-MM-DD
   paymentMethod: string; // ej. "Transferencia Bancaria"
-  currency: 'Peso Colombiano';
+  currency: 'COP' | 'USD';
 
   // Conceptos y Totales
   items: InvoiceItem[];

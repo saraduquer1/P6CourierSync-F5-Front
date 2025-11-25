@@ -8,56 +8,64 @@ import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Header } from '@/components/layout/Header';
 import { useToast } from '@/hooks/use-toast';
-import { Invoice, STORAGE_KEYS } from '@/types';
-import { initialInvoices, defaultTemplates } from '@/data/mockData';
+import { invoiceService, InvoiceResponseDTO } from '@/services/invoiceService.ts';
 import { usePDFGenerator } from '@/hooks/usePDFGenerator';
-import { useInvoiceEmission } from '@/hooks/useInvoiceEmission';
 import { PDFPreviewDialog } from '@/components/PDFPreviewDialog';
-import { resetLocalStorage } from '@/lib/resetData';
+import { defaultTemplates } from '@/data/mockData';
+import type { Invoice } from '@/types';
 
 export default function Panel() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceResponseDTO[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isEmitting, setIsEmitting] = useState(false);
+  const { generatePDF, downloadPDF, isGenerating } = usePDFGenerator();
+  const [selectedTemplate, setSelectedTemplate] = useState(
+    defaultTemplates.find(t => t.segment === 'retail') || defaultTemplates[0]
+  );
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [showPDFPreview, setShowPDFPreview] = useState(false);
-  const [currentInvoiceId, setCurrentInvoiceId] = useState<string>('');
-  const { generatePDF, downloadPDF, isGenerating } = usePDFGenerator();
-  const { emitInvoice, isEmitting } = useInvoiceEmission();
+  const [currentInvoice, setCurrentInvoice] = useState<InvoiceResponseDTO | null>(null);
 
+  // Cargar facturas del backend
   useEffect(() => {
-    // Reiniciar datos automáticamente si no hay envíos
-    const savedShipments = localStorage.getItem(STORAGE_KEYS.SHIPMENTS);
-    if (!savedShipments || JSON.parse(savedShipments).length === 0) {
-      resetLocalStorage();
-    }
-    
-    // Cargar facturas del localStorage o usar datos iniciales
-    const savedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
-    if (savedInvoices) {
-      try {
-        setInvoices(JSON.parse(savedInvoices));
-      } catch (error) {
-        console.error('Error loading invoices:', error);
-        setInvoices(initialInvoices);
-        localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(initialInvoices));
-      }
-    } else {
-      setInvoices(initialInvoices);
-      localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(initialInvoices));
-    }
+    loadInvoices();
   }, []);
 
-  const getStatusBadge = (status: Invoice['status']) => {
-    const variants = {
-      'Borrador': 'secondary',
-      'Emitida': 'default',
-      'Pagada': 'success',
-    } as const;
+  const loadInvoices = async () => {
+    setIsLoading(true);
+    try {
+      const data = await invoiceService.getAll();
+      setInvoices(data);
+    } catch (error) {
+      console.error('Error loading invoices:', error);
+      toast({
+        title: 'Error',
+        description: 'No se pudieron cargar las facturas',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    const variants: Record<string, 'secondary' | 'default' | 'success'> = {
+      'DRAFT': 'secondary',
+      'ISSUED': 'default',
+      'PAID': 'success',
+    };
+
+    const labels: Record<string, string> = {
+      'DRAFT': 'Borrador',
+      'ISSUED': 'Emitida',
+      'PAID': 'Pagada',
+    };
 
     return (
       <Badge variant={variants[status] || 'secondary'}>
-        {status}
+        {labels[status] || status}
       </Badge>
     );
   };
@@ -74,35 +82,81 @@ export default function Panel() {
     return new Date(dateString).toLocaleDateString('es-CO');
   };
 
-  const handleDeleteInvoice = (invoiceId: string) => {
-    const updatedInvoices = invoices.filter(invoice => invoice.id !== invoiceId);
-    setInvoices(updatedInvoices);
-    localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(updatedInvoices));
-    
-    toast({
-      title: "Factura eliminada",
-      description: "El borrador de la factura ha sido eliminado correctamente.",
-    });
+  const handleEmitInvoice = async (invoiceId: number) => {
+    setIsEmitting(true);
+    try {
+      await invoiceService.issue(invoiceId);
+      toast({
+        title: 'Factura emitida',
+        description: 'La factura ha sido emitida exitosamente',
+      });
+      // Recargar facturas
+      loadInvoices();
+    } catch (error) {
+      console.error('Error emitting invoice:', error);
+      toast({
+        title: 'Error',
+        description: 'No se pudo emitir la factura',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsEmitting(false);
+    }
   };
 
-  const handleQuickPDFPreview = async (invoice: Invoice) => {
-    const template = defaultTemplates.find(
-      t => t.segment === invoice.clientSegment
-    ) || defaultTemplates[0];
+  const handleDownloadPDF = async (invoice: InvoiceResponseDTO) => {
+    setCurrentInvoice(invoice);
     
-    const blob = await generatePDF(invoice, template, false);
+    // Convertir InvoiceResponseDTO a Invoice para el PDF
+    const invoiceForPDF: Invoice = {
+      id: invoice.invoiceNumber,
+      status: invoice.status === 'DRAFT' ? 'Borrador' : invoice.status === 'ISSUED' ? 'Emitida' : 'Pagada',
+      clientName: invoice.clientName,
+      clientNit: invoice.clientNit || '',
+      clientAddress: invoice.clientAddress || '',
+      clientEmail: invoice.clientEmail || '',
+      clientSegment: 'retail',
+      issueDate: invoice.invoiceDate,
+      dueDate: invoice.dueDate,
+      paymentMethod: invoice.paymentMethod || 'Transferencia Bancaria',
+      currency: invoice.currency as 'COP' | 'USD',
+      items: invoice.items.map(item => ({
+        descripcion: item.description,
+        cantidad: item.quantity,
+        precioUnitario: Number(item.unitPrice)
+      })),
+      subtotal: Number(invoice.subtotal),
+      taxAmount: Number(invoice.taxAmount),
+      total: Number(invoice.totalAmount),
+      observations: invoice.observations || ''
+    };
+
+    const template = defaultTemplates.find(t => t.segment === 'retail') || defaultTemplates[0];
+    const blob = await generatePDF(invoiceForPDF, template, false); // false = NO auto-download
     
     if (blob) {
       setPdfBlob(blob);
-      setCurrentInvoiceId(invoice.id);
       setShowPDFPreview(true);
     }
   };
 
   const handleDownloadFromPreview = () => {
-    if (!pdfBlob || !currentInvoiceId) return;
-    downloadPDF(pdfBlob, currentInvoiceId);
+    if (!pdfBlob || !currentInvoice) return;
+    downloadPDF(pdfBlob, currentInvoice.invoiceNumber);
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <div className="flex items-center justify-center py-12">
+            <RefreshCw className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -130,6 +184,14 @@ export default function Panel() {
             <CardTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
               Facturas Registradas
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={loadInvoices}
+                className="ml-auto"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -152,7 +214,7 @@ export default function Panel() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>ID Factura</TableHead>
+                    <TableHead>Número Factura</TableHead>
                     <TableHead>Cliente</TableHead>
                     <TableHead>Fecha Emisión</TableHead>
                     <TableHead>Total</TableHead>
@@ -163,82 +225,47 @@ export default function Panel() {
                 <TableBody>
                   {invoices.map((invoice) => (
                     <TableRow key={invoice.id}>
-                      <TableCell className="font-medium">{invoice.id}</TableCell>
+                      <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
                       <TableCell>{invoice.clientName}</TableCell>
-                      <TableCell>{formatDate(invoice.issueDate)}</TableCell>
-                      <TableCell>{formatCurrency(invoice.total)}</TableCell>
+                      <TableCell>{formatDate(invoice.invoiceDate)}</TableCell>
+                      <TableCell>{formatCurrency(Number(invoice.totalAmount))}</TableCell>
                       <TableCell>{getStatusBadge(invoice.status)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          {invoice.status === 'Borrador' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={async () => {
-                                const result = await emitInvoice(invoice.id);
-                                if (result.success) {
-                                  window.location.reload();
-                                }
-                              }}
-                              disabled={isEmitting}
-                              title="Emitir factura"
-                            >
-                              <Send className="h-4 w-4" />
-                            </Button>
-                          )}
-                          {invoice.status === 'Emitida' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleQuickPDFPreview(invoice)}
-                              disabled={isGenerating}
-                              title="Vista previa PDF"
-                            >
-                              <Download className="h-4 w-4" />
-                            </Button>
-                          )}
-                          {invoice.status === 'Borrador' && (
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>¿Eliminar borrador?</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    Esta acción no se puede deshacer. El borrador de la factura será eliminado permanentemente.
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    onClick={() => handleDeleteInvoice(invoice.id)}
-                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                  >
-                                    Eliminar
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          )}
-                          {invoice.status === 'Borrador' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => navigate(`/facturas/${invoice.id}/editar`)}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
+                          {invoice.status === 'DRAFT' && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleEmitInvoice(invoice.id)}
+                                disabled={isEmitting}
+                                title="Emitir factura"
+                              >
+                                <Send className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => navigate(`/facturas/${invoice.id}/editar`)}
+                                title="Editar factura"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            </>
                           )}
                           <Button
                             variant="ghost"
                             size="sm"
+                            onClick={() => handleDownloadPDF(invoice)}
+                            title="Descargar PDF"
+                          >
+                            <Download className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => navigate(`/facturas/${invoice.id}/ver`)}
+                            title="Ver detalles"
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
@@ -251,15 +278,16 @@ export default function Panel() {
             )}
           </CardContent>
         </Card>
-
-        <PDFPreviewDialog
-          open={showPDFPreview}
-          onOpenChange={setShowPDFPreview}
-          pdfBlob={pdfBlob}
-          invoiceId={currentInvoiceId}
-          onDownload={handleDownloadFromPreview}
-        />
       </main>
+
+      {/* Dialog de Vista Previa PDF */}
+      <PDFPreviewDialog
+        open={showPDFPreview}
+        onOpenChange={setShowPDFPreview}
+        pdfBlob={pdfBlob}
+        invoiceId={currentInvoice?.invoiceNumber || ''}
+        onDownload={handleDownloadFromPreview}
+      />
     </div>
   );
 }
